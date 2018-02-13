@@ -87,17 +87,6 @@ public:
     /// Called whenever BASP learns the ID of a remote node.
     virtual void learned_new_node(const node_id& nid) = 0;
 
-    // TODO: Remove this! (Not sure yet if I'll need a somewhat similar call.)
-    /// Called whenever BASP learns the ID of a remote node
-    /// to which it does not have a direct connection.
-    //virtual void learned_new_node_directly(const node_id& nid,
-                                           //bool was_known_indirectly) = 0;
-
-    // TODO: Remove this! (Not sure yet if I'll need a somewhat similar call.)
-    /// Called whenever BASP learns the ID of a remote node
-    /// to which it does not have a direct connection.
-    //virtual void learned_new_node_indirectly(const node_id& nid) = 0;
-
     /// Called if a heartbeat was received from `nid`
     virtual void handle_heartbeat(const node_id& nid) = 0;
 
@@ -346,11 +335,8 @@ public:
         // TODO: Removed the lookup since the handle should not have changed
         //       as we would have already known the node otherwise.
         // Write handshake as client in response.
-        if (tcp_based) {
-          auto ch = get<connection_handle>(hdl);
-          write_client_handshake(ctx, callee_.get_buffer(ch),
-                                 hdr.source_node);
-        }
+        if (tcp_based)
+          write_client_handshake(ctx, callee_.get_buffer(hdl), hdr.source_node);
         callee_.learned_new_node(hdr.source_node);
         callee_.finalize_handshake(hdr.source_node, aid, sigs);
         flush(hdl);
@@ -382,7 +368,7 @@ public:
           tbl_.add(hdl, hdr.source_node);
           // TODO: Add contact information. Where do we get the addresses from?
           tbl_.status(hdr.source_node, routing_table::communication::established);
-          tbl_.forwarder(hdr.source_node, hdr.source_node);
+          tbl_.forwarder(hdr.source_node, hdl);
           // tbl_.add(hdr.source_node, {network::protocol::tcp, });
           callee_.learned_new_node(hdr.source_node);
         } else {
@@ -394,7 +380,7 @@ public:
             tbl_.add(hdl, hdr.source_node);
             // TODO: Add contact information. Where do we get the addresses from?
             tbl_.status(hdr.source_node, routing_table::communication::established);
-            tbl_.forwarder(hdr.source_node, hdr.source_node);
+            tbl_.forwarder(hdr.source_node, hdl);
             // tbl_.add(hdr.source_node, {network::protocol::udp, });
           }
           uint16_t seq = (ep && ep->requires_ordering) ? ep->seq_outgoing++ : 0;

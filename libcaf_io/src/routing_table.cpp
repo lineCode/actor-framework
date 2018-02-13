@@ -70,7 +70,7 @@ bool routing_table::reachable(const node_id& dest) {
 }
 
 bool routing_table::status(const node_id& nid,
-                           routing_table::communication_state new_status) {
+                           routing_table::communication new_status) {
   auto i = node_information_base_.find(nid);
   if (i == node_information_base_.end())
     return false;
@@ -78,7 +78,7 @@ bool routing_table::status(const node_id& nid,
   return true;
 }
 
-optional<routing_table::communication_state>
+optional<routing_table::communication>
 routing_table::status(const node_id& nid) {
   auto i = node_information_base_.find(nid);
   if (i == node_information_base_.end())
