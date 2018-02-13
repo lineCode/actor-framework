@@ -86,6 +86,7 @@ void stream_manager::handle(stream_slots slots, upstream_msg::forced_drop& x) {
 }
 
 void stream_manager::close() {
+  CAF_LOG_TRACE("");
   out().close();
   self_->erase_inbound_paths_later(this);
   if (!promises_.empty())
@@ -93,6 +94,7 @@ void stream_manager::close() {
 }
 
 void stream_manager::abort(error reason) {
+  CAF_LOG_TRACE(CAF_ARG(reason));
   if (!promises_.empty() || !in_flight_promises_.empty()) {
     auto msg = make_message(reason);
     deliver_promises(msg);

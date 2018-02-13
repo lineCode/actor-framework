@@ -948,6 +948,18 @@ public:
     return mailbox_;
   }
 
+  /// @private
+  default_queue& get_default_queue();
+
+  /// @private
+  upstream_queue& get_upstream_queue();
+
+  /// @private
+  downstream_queue& get_downstream_queue();
+
+  /// @private
+  urgent_queue& get_urgent_queue();
+
   // -- inbound_path management ------------------------------------------------
 
   inbound_path* make_inbound_path(stream_manager_ptr mgr, stream_slots slots,

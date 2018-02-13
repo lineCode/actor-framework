@@ -195,26 +195,35 @@ void scheduled_actor::launch(execution_unit* eu, bool lazy, bool hide) {
 }
 
 bool scheduled_actor::cleanup(error&& fail_state, execution_unit* host) {
+  CAF_LOG_TRACE(CAF_ARG(fail_state));
   // Shutdown hosting thread when running detached.
   if (getf(is_detached_flag)) {
     CAF_ASSERT(private_thread_ != nullptr);
     private_thread_->shutdown();
   }
-  // Clear all state.
+  // Clear state for open requests.
   awaited_responses_.clear();
   multiplexed_responses_.clear();
-  /*
-  if (fail_state != none)
-    for (auto& kvp : streams_)
-      kvp.second->abort(fail_state);
-  else
-    for (auto& kvp : streams_)
+  // Clear state for open streams.
+  if (fail_state == none) {
+    for (auto& kvp : stream_managers_)
       kvp.second->close();
-  streams_.clear();
-  */
+    for (auto& kvp : pending_stream_managers_)
+      kvp.second->close();
+  } else {
+    for (auto& kvp : stream_managers_)
+      kvp.second->abort(fail_state);
+    for (auto& kvp : pending_stream_managers_)
+      kvp.second->abort(fail_state);
+  }
+  stream_managers_.clear();
+  pending_stream_managers_.clear();
+  get_downstream_queue().cleanup();
+  // Clear mailbox.
   if (!mailbox_.closed()) {
     mailbox_.close();
-    // TODO: messages that are stuck in the cache can get lost
+    get_default_queue().flush_cache();
+    get_urgent_queue().flush_cache();
     detail::sync_request_bouncer bounce{fail_state};
     while (mailbox_.queue().new_round(1000, bounce).consumed_items)
       ; // nop
@@ -260,6 +269,24 @@ operator()(size_t, upstream_queue&, mailbox_element& x) {
   visit(f, um.content);
   return intrusive::task_result::resume;
 }
+
+namespace {
+
+// TODO: replace with generic lambda when switching to C++14
+struct downstream_msg_visitor {
+  scheduled_actor* thisptr;
+  downstream_queue& qs_ref;
+  policy::downstream_messages::nested_queue_type& q_ref;
+  inbound_path* inptr;
+  downstream_msg& dm;
+
+  template <class T>
+  void operator()(T& x) {
+    selfptr->handle_upstream_msg(um.slots, um.sender, x);
+  }
+};
+
+} // namespace <anonymous>
 
 intrusive::task_result scheduled_actor::mailbox_visitor::
 operator()(size_t, downstream_queue& qs, stream_slot,
@@ -808,6 +835,26 @@ void scheduled_actor::push_to_cache(mailbox_element_ptr ptr) {
   }
 }
 
+scheduled_actor::default_queue& scheduled_actor::get_default_queue() {
+  constexpr size_t queue_id = mailbox_policy::default_queue_index;
+  return get<queue_id>(mailbox_.queue().queues());
+}
+
+scheduled_actor::upstream_queue& scheduled_actor::get_upstream_queue() {
+  constexpr size_t queue_id = mailbox_policy::upstream_queue_index;
+  return get<queue_id>(mailbox_.queue().queues());
+}
+
+scheduled_actor::downstream_queue& scheduled_actor::get_downstream_queue() {
+  constexpr size_t queue_id = mailbox_policy::downstream_queue_index;
+  return get<queue_id>(mailbox_.queue().queues());
+}
+
+scheduled_actor::urgent_queue& scheduled_actor::get_urgent_queue() {
+  constexpr size_t queue_id = mailbox_policy::urgent_queue_index;
+  return get<queue_id>(mailbox_.queue().queues());
+}
+
 inbound_path* scheduled_actor::make_inbound_path(stream_manager_ptr mgr,
                                                  stream_slots slots,
                                                  strong_actor_ptr sender) {
@@ -821,13 +868,13 @@ inbound_path* scheduled_actor::make_inbound_path(stream_manager_ptr mgr,
 }
 
 void scheduled_actor::erase_inbound_path_later(stream_slot slot) {
-  constexpr size_t queue_id = mailbox_policy::downstream_queue_index;
-  get<queue_id>(mailbox_.queue().queues()).erase_later(slot);
+  CAF_LOG_TRACE(CAF_ARG(slot));
+  get_downstream_queue().erase_later(slot);
 }
 
 void scheduled_actor::erase_inbound_paths_later(const stream_manager* ptr) {
-  constexpr size_t queue_id = mailbox_policy::downstream_queue_index;
-  for (auto& kvp : get<queue_id>(mailbox_.queue().queues()).queues()) {
+  CAF_LOG_TRACE("");
+  for (auto& kvp : get_downstream_queue().queues()) {
     auto& path = kvp.second.policy().handler;
     if (path != nullptr && path->mgr == ptr)
       erase_inbound_path_later(kvp.first);
@@ -836,6 +883,7 @@ void scheduled_actor::erase_inbound_paths_later(const stream_manager* ptr) {
 
 void scheduled_actor::erase_inbound_paths_later(const stream_manager* ptr,
                                                 error reason) {
+  CAF_LOG_TRACE(CAF_ARG(reason));
   using fn = void (*)(local_actor*, inbound_path&, error&);
   fn regular = [](local_actor* self, inbound_path& in, error&) {
     in.emit_regular_shutdown(self);
@@ -844,8 +892,7 @@ void scheduled_actor::erase_inbound_paths_later(const stream_manager* ptr,
     in.emit_irregular_shutdown(self, rsn);
   };
   auto f = reason == none ? regular : irregular;
-  static constexpr size_t queue_id = mailbox_policy::downstream_queue_index;
-  for (auto& kvp : get<queue_id>(mailbox_.queue().queues()).queues()) {
+  for (auto& kvp : get_downstream_queue().queues()) {
     auto& path = kvp.second.policy().handler;
     if (path != nullptr && path->mgr == ptr) {
       f(this, *path, reason);
